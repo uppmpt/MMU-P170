@@ -1,0 +1,1082 @@
+module l0_tlb
+input:
+  clk
+  rst
+  req_valid
+  req_va [64 bits]
+  req_is_write
+  req_is_fetch
+  satp [64 bits]
+  priv [2 bits]
+  mstatus_mxr
+  mstatus_sum
+  fill_valid
+  fill_va [64 bits]
+  fill_ppn [44 bits]
+  fill_perm [5 bits]
+  fill_asid [16 bits]
+  fill_g [1 bits]
+  fill_level [2 bits]
+  sfence_valid
+  sfence_va [64 bits]
+  sfence_asid [16 bits]
+output:
+  hit
+  pa [64 bits]
+  fault
+  cause [4 bits]
+wires:
+  va_vpn [27 bits]
+  satp_asid [16 bits]
+  m0 [1 bits]
+  m1 [1 bits]
+  m2 [1 bits]
+  m3 [1 bits]
+  hit_any [1 bits]
+  r [1 bits]
+  w [1 bits]
+  x [1 bits]
+  u [1 bits]
+  ok [1 bits]
+  fill_rr [2 bits]
+  sfvpn [27 bits]
+  sfva0 [1 bits]
+  sfasid0 [1 bits]
+  ppn0_out [44 bits]
+  ppn1_out [44 bits]
+  ppn2_out [44 bits]
+  ppn3_out [44 bits]
+  pa_base [44 bits]
+logic:
+  function perm_ok(p_r [1 bits], p_w [1 bits], p_x [1 bits], p_u [1 bits], p_fetch [1 bits], p_write [1 bits]) [1 bits]
+    return pick(priv == 0, p_u, pick(priv == 1, pick(p_u, pick(p_fetch, 0, mstatus_sum), 1), pick(priv == 3, 1, 0))) & pick(p_fetch, p_x, pick(p_write, p_w, pick(p_r, 1, pick(mstatus_mxr, p_x, 0))))
+  end function
+  function sf_matches(vpn_i [27 bits], lvl_i [2 bits], asid_i [16 bits], g_i [1 bits], s_vpn [27 bits], s_asid [16 bits], s_va0 [1 bits], s_asid0 [1 bits]) [1 bits]
+    return pick(s_va0, pick(s_asid0, 1, (asid_i == s_asid) & (!g_i)), pick(s_asid0, pick(lvl_i == 0, vpn_i == s_vpn, pick(lvl_i == 1, slice(vpn_i, 26, 9) == slice(s_vpn, 26, 9), pick(lvl_i == 2, slice(vpn_i, 26, 18) == slice(s_vpn, 26, 18), 0))), pick(lvl_i == 0, vpn_i == s_vpn, pick(lvl_i == 1, slice(vpn_i, 26, 9) == slice(s_vpn, 26, 9), pick(lvl_i == 2, slice(vpn_i, 26, 18) == slice(s_vpn, 26, 18), 0))) & (asid_i == s_asid) & (!g_i)))
+  end function
+  connect va_vpn = slice(req_va, 38, 12)
+  connect satp_asid = slice(satp, 59, 44)
+  connect sfvpn = slice(sfence_va, 38, 12)
+  connect sfva0 = (sfence_va == 0)
+  connect sfasid0 = (sfence_asid == 0)
+  wire vm0 [1 bits] = pick(lvl[0] == 0, vpn[0] == va_vpn, pick(lvl[0] == 1, slice(vpn[0], 26, 9) == slice(va_vpn, 26, 9), pick(lvl[0] == 2, slice(vpn[0], 26, 18) == slice(va_vpn, 26, 18), 0)))
+  wire vm1 [1 bits] = pick(lvl[1] == 0, vpn[1] == va_vpn, pick(lvl[1] == 1, slice(vpn[1], 26, 9) == slice(va_vpn, 26, 9), pick(lvl[1] == 2, slice(vpn[1], 26, 18) == slice(va_vpn, 26, 18), 0)))
+  wire vm2 [1 bits] = pick(lvl[2] == 0, vpn[2] == va_vpn, pick(lvl[2] == 1, slice(vpn[2], 26, 9) == slice(va_vpn, 26, 9), pick(lvl[2] == 2, slice(vpn[2], 26, 18) == slice(va_vpn, 26, 18), 0)))
+  wire vm3 [1 bits] = pick(lvl[3] == 0, vpn[3] == va_vpn, pick(lvl[3] == 1, slice(vpn[3], 26, 9) == slice(va_vpn, 26, 9), pick(lvl[3] == 2, slice(vpn[3], 26, 18) == slice(va_vpn, 26, 18), 0)))
+  wire am0 [1 bits] = (asid[0] == satp_asid) | g[0]
+  wire am1 [1 bits] = (asid[1] == satp_asid) | g[1]
+  wire am2 [1 bits] = (asid[2] == satp_asid) | g[2]
+  wire am3 [1 bits] = (asid[3] == satp_asid) | g[3]
+  connect m0 = valid[0] & vm0 & am0
+  connect m1 = valid[1] & vm1 & am1
+  connect m2 = valid[2] & vm2 & am2
+  connect m3 = valid[3] & vm3 & am3
+  connect hit_any = m0 | m1 | m2 | m3
+  connect hit = hit_any & (slice(satp, 63, 60) == 8)
+  connect ppn0_out = pick(lvl[0] == 0, ppn[0], pick(lvl[0] == 1, cat(slice(ppn[0], 43, 9), slice(req_va, 20, 12)), pick(lvl[0] == 2, cat(slice(ppn[0], 43, 18), slice(req_va, 29, 12)), ppn[0])))
+  connect ppn1_out = pick(lvl[1] == 0, ppn[1], pick(lvl[1] == 1, cat(slice(ppn[1], 43, 9), slice(req_va, 20, 12)), pick(lvl[1] == 2, cat(slice(ppn[1], 43, 18), slice(req_va, 29, 12)), ppn[1])))
+  connect ppn2_out = pick(lvl[2] == 0, ppn[2], pick(lvl[2] == 1, cat(slice(ppn[2], 43, 9), slice(req_va, 20, 12)), pick(lvl[2] == 2, cat(slice(ppn[2], 43, 18), slice(req_va, 29, 12)), ppn[2])))
+  connect ppn3_out = pick(lvl[3] == 0, ppn[3], pick(lvl[3] == 1, cat(slice(ppn[3], 43, 9), slice(req_va, 20, 12)), pick(lvl[3] == 2, cat(slice(ppn[3], 43, 18), slice(req_va, 29, 12)), ppn[3])))
+  connect pa_base = pick(m0, ppn0_out, pick(m1, ppn1_out, pick(m2, ppn2_out, ppn3_out)))
+  connect pa = ext(pa_base, 64) << 12 | ext(slice(req_va, 11, 0), 64)
+  connect r = pick(m0, perm[0][0], pick(m1, perm[1][0], pick(m2, perm[2][0], perm[3][0])))
+  connect w = pick(m0, perm[0][1], pick(m1, perm[1][1], pick(m2, perm[2][1], perm[3][1])))
+  connect x = pick(m0, perm[0][2], pick(m1, perm[1][2], pick(m2, perm[2][2], perm[3][2])))
+  connect u = pick(m0, perm[0][3], pick(m1, perm[1][3], pick(m2, perm[2][3], perm[3][3])))
+  connect ok = perm_ok(r, w, x, u, 0, req_is_write)
+  connect fault = hit_any & (!ok)
+  connect cause = pick(req_is_fetch, 12, pick(req_is_write, 15, 13))
+arrays:
+  vpn [4] [27 bits]
+  ppn [4] [44 bits]
+  perm [4] [5 bits]
+  valid [4] [1 bits]
+  asid [4] [16 bits]
+  g [4] [1 bits]
+  lvl [4] [2 bits]
+behavior on clk (posSen) or rst (highSen):
+  if rst:
+    fill_rr = 0
+    valid[0] = 0
+    valid[1] = 0
+    valid[2] = 0
+    valid[3] = 0
+  else:
+    if sfence_valid:
+      if sf_matches(vpn[0], lvl[0], asid[0], g[0], sfvpn, sfence_asid, sfva0, sfasid0):
+        valid[0] = 0
+      if sf_matches(vpn[1], lvl[1], asid[1], g[1], sfvpn, sfence_asid, sfva0, sfasid0):
+        valid[1] = 0
+      if sf_matches(vpn[2], lvl[2], asid[2], g[2], sfvpn, sfence_asid, sfva0, sfasid0):
+        valid[2] = 0
+      if sf_matches(vpn[3], lvl[3], asid[3], g[3], sfvpn, sfence_asid, sfva0, sfasid0):
+        valid[3] = 0
+    if fill_valid:
+      vpn[fill_rr] = slice(fill_va, 38, 12)
+      ppn[fill_rr] = fill_ppn
+      perm[fill_rr] = fill_perm
+      asid[fill_rr] = fill_asid
+      g[fill_rr] = fill_g
+      lvl[fill_rr] = fill_level
+      valid[fill_rr] = 1
+      fill_rr = (fill_rr + 1) & 3
+end behavior
+end module
+
+module l1_tlb
+input:
+  clk
+  rst
+  req_valid
+  req_va [64 bits]
+  req_is_write
+  req_is_fetch
+  req_id [4 bits]
+  satp [64 bits]
+  priv [2 bits]
+  mstatus_mxr
+  mstatus_sum
+  fill_valid
+  fill_va [64 bits]
+  fill_ppn [44 bits]
+  fill_perm [5 bits]
+  fill_asid [16 bits]
+  fill_g [1 bits]
+  fill_level [2 bits]
+  sfence_valid
+  sfence_va [64 bits]
+  sfence_asid [16 bits]
+output:
+  resp_valid
+  resp_pa [64 bits]
+  resp_fault
+  resp_cause [4 bits]
+  resp_id [4 bits]
+  resp_tval [64 bits]
+  hit
+wires:
+  idx [4 bits]
+  fill_idx [4 bits]
+  fill_way [1 bits]
+  s1_valid [1 bits]
+  s1_va [64 bits]
+  s1_id [4 bits]
+  s1_is_write [1 bits]
+  s1_w0_vpn [27 bits]
+  s1_w1_vpn [27 bits]
+  s1_w0_ppn [44 bits]
+  s1_w1_ppn [44 bits]
+  s1_w0_valid [1 bits]
+  s1_w1_valid [1 bits]
+  s1_w0_perm [5 bits]
+  s1_w1_perm [5 bits]
+  s1_w0_asid [16 bits]
+  s1_w1_asid [16 bits]
+  s1_w0_g [1 bits]
+  s1_w1_g [1 bits]
+  s1_w0_lvl [2 bits]
+  s1_w1_lvl [2 bits]
+  va_vpn [27 bits]
+  m0 [1 bits]
+  m1 [1 bits]
+  hit_int [1 bits]
+  pa_base [44 bits]
+  ok [1 bits]
+  r [1 bits]
+  w [1 bits]
+  x [1 bits]
+  u [1 bits]
+  tval [64 bits]
+  satp_asid [16 bits]
+  sfvpn [27 bits]
+  sfva0 [1 bits]
+  sfasid0 [1 bits]
+  ppn0_out [44 bits]
+  ppn1_out [44 bits]
+logic:
+  function perm_ok(p_r [1 bits], p_w [1 bits], p_x [1 bits], p_u [1 bits], p_fetch [1 bits], p_write [1 bits]) [1 bits]
+    return pick(priv == 0, p_u, pick(priv == 1, pick(p_u, pick(p_fetch, 0, mstatus_sum), 1), pick(priv == 3, 1, 0))) & pick(p_fetch, p_x, pick(p_write, p_w, pick(p_r, 1, pick(mstatus_mxr, p_x, 0))))
+  end function
+  function sf_matches(vpn_i [27 bits], lvl_i [2 bits], asid_i [16 bits], g_i [1 bits], s_vpn [27 bits], s_asid [16 bits], s_va0 [1 bits], s_asid0 [1 bits]) [1 bits]
+    return pick(s_va0, pick(s_asid0, 1, (asid_i == s_asid) & (!g_i)), pick(s_asid0, pick(lvl_i == 0, vpn_i == s_vpn, pick(lvl_i == 1, slice(vpn_i, 26, 9) == slice(s_vpn, 26, 9), pick(lvl_i == 2, slice(vpn_i, 26, 18) == slice(s_vpn, 26, 18), 0))), pick(lvl_i == 0, vpn_i == s_vpn, pick(lvl_i == 1, slice(vpn_i, 26, 9) == slice(s_vpn, 26, 9), pick(lvl_i == 2, slice(vpn_i, 26, 18) == slice(s_vpn, 26, 18), 0))) & (asid_i == s_asid) & (!g_i)))
+  end function
+  connect idx = slice(req_va, 15, 12)
+  connect fill_idx = slice(fill_va, 15, 12)
+  connect satp_asid = slice(satp, 59, 44)
+  connect sfvpn = slice(sfence_va, 38, 12)
+  connect sfva0 = (sfence_va == 0)
+  connect sfasid0 = (sfence_asid == 0)
+  wire r_w0_vpn [27 bits] = vpn_w0[idx]
+  wire r_w1_vpn [27 bits] = vpn_w1[idx]
+  wire r_w0_ppn [44 bits] = ppn_w0[idx]
+  wire r_w1_ppn [44 bits] = ppn_w1[idx]
+  wire r_w0_valid [1 bits] = valid_w0[idx]
+  wire r_w1_valid [1 bits] = valid_w1[idx]
+  wire r_w0_perm [5 bits] = perm_w0[idx]
+  wire r_w1_perm [5 bits] = perm_w1[idx]
+  wire r_w0_asid [16 bits] = asid_w0[idx]
+  wire r_w1_asid [16 bits] = asid_w1[idx]
+  wire r_w0_g [1 bits] = g_w0[idx]
+  wire r_w1_g [1 bits] = g_w1[idx]
+  wire r_w0_lvl [2 bits] = lvl_w0[idx]
+  wire r_w1_lvl [2 bits] = lvl_w1[idx]
+  connect va_vpn = slice(s1_va, 38, 12)
+  wire vm0 [1 bits] = pick(s1_w0_lvl == 0, s1_w0_vpn == va_vpn, pick(s1_w0_lvl == 1, slice(s1_w0_vpn, 26, 9) == slice(va_vpn, 26, 9), pick(s1_w0_lvl == 2, slice(s1_w0_vpn, 26, 18) == slice(va_vpn, 26, 18), 0)))
+  wire vm1 [1 bits] = pick(s1_w1_lvl == 0, s1_w1_vpn == va_vpn, pick(s1_w1_lvl == 1, slice(s1_w1_vpn, 26, 9) == slice(va_vpn, 26, 9), pick(s1_w1_lvl == 2, slice(s1_w1_vpn, 26, 18) == slice(va_vpn, 26, 18), 0)))
+  wire am0 [1 bits] = (s1_w0_asid == satp_asid) | s1_w0_g
+  wire am1 [1 bits] = (s1_w1_asid == satp_asid) | s1_w1_g
+  connect m0 = s1_w0_valid & vm0 & am0
+  connect m1 = s1_w1_valid & vm1 & am1
+  connect hit_int = (m0 | m1) & (slice(satp, 63, 60) == 8)
+  connect hit = hit_int
+  connect ppn0_out = pick(s1_w0_lvl == 0, s1_w0_ppn, pick(s1_w0_lvl == 1, cat(slice(s1_w0_ppn, 43, 9), slice(s1_va, 20, 12)), pick(s1_w0_lvl == 2, cat(slice(s1_w0_ppn, 43, 18), slice(s1_va, 29, 12)), s1_w0_ppn)))
+  connect ppn1_out = pick(s1_w1_lvl == 0, s1_w1_ppn, pick(s1_w1_lvl == 1, cat(slice(s1_w1_ppn, 43, 9), slice(s1_va, 20, 12)), pick(s1_w1_lvl == 2, cat(slice(s1_w1_ppn, 43, 18), slice(s1_va, 29, 12)), s1_w1_ppn)))
+  connect pa_base = pick(m0, ppn0_out, ppn1_out)
+  wire pa_comb [64 bits] = ext(pa_base, 64) << 12 | ext(slice(s1_va, 11, 0), 64)
+  connect r = pick(m0, s1_w0_perm[0], s1_w1_perm[0])
+  connect w = pick(m0, s1_w0_perm[1], s1_w1_perm[1])
+  connect x = pick(m0, s1_w0_perm[2], s1_w1_perm[2])
+  connect u = pick(m0, s1_w0_perm[3], s1_w1_perm[3])
+  connect ok = perm_ok(r, w, x, u, 0, s1_is_write)
+  connect tval = pick((!hit_int) | (!ok), s1_va, 0)
+  connect resp_valid = s1_valid
+  connect resp_id = s1_id
+  connect resp_pa = pa_comb
+  connect resp_fault = s1_valid & ((!hit_int) | (!ok))
+  connect resp_cause = pick(s1_is_write, 15, 13)
+  connect resp_tval = tval
+arrays:
+  vpn_w0 [16] [27 bits]
+  ppn_w0 [16] [44 bits]
+  valid_w0 [16] [1 bits]
+  perm_w0 [16] [5 bits]
+  asid_w0 [16] [16 bits]
+  g_w0 [16] [1 bits]
+  lvl_w0 [16] [2 bits]
+  vpn_w1 [16] [27 bits]
+  ppn_w1 [16] [44 bits]
+  valid_w1 [16] [1 bits]
+  perm_w1 [16] [5 bits]
+  asid_w1 [16] [16 bits]
+  g_w1 [16] [1 bits]
+  lvl_w1 [16] [2 bits]
+behavior on clk (posSen) or rst (highSen):
+  if rst:
+    s1_valid = 0
+    fill_way = 0
+    for i in 0..15:
+      valid_w0[i] = 0
+      valid_w1[i] = 0
+  else:
+    if sfence_valid:
+      for i in 0..15:
+        if valid_w0[i] & sf_matches(vpn_w0[i], lvl_w0[i], asid_w0[i], g_w0[i], sfvpn, sfence_asid, sfva0, sfasid0):
+          valid_w0[i] = 0
+        if valid_w1[i] & sf_matches(vpn_w1[i], lvl_w1[i], asid_w1[i], g_w1[i], sfvpn, sfence_asid, sfva0, sfasid0):
+          valid_w1[i] = 0
+    if fill_valid:
+      if fill_way == 0:
+        vpn_w0[fill_idx] = slice(fill_va, 38, 12)
+        ppn_w0[fill_idx] = fill_ppn
+        perm_w0[fill_idx] = fill_perm
+        asid_w0[fill_idx] = fill_asid
+        g_w0[fill_idx] = fill_g
+        lvl_w0[fill_idx] = fill_level
+        valid_w0[fill_idx] = 1
+      else:
+        vpn_w1[fill_idx] = slice(fill_va, 38, 12)
+        ppn_w1[fill_idx] = fill_ppn
+        perm_w1[fill_idx] = fill_perm
+        asid_w1[fill_idx] = fill_asid
+        g_w1[fill_idx] = fill_g
+        lvl_w1[fill_idx] = fill_level
+        valid_w1[fill_idx] = 1
+      fill_way = !fill_way
+    s1_valid = req_valid
+    s1_va = req_va
+    s1_id = req_id
+    s1_is_write = req_is_write
+    s1_w0_vpn = r_w0_vpn
+    s1_w1_vpn = r_w1_vpn
+    s1_w0_ppn = r_w0_ppn
+    s1_w1_ppn = r_w1_ppn
+    s1_w0_valid = r_w0_valid
+    s1_w1_valid = r_w1_valid
+    s1_w0_perm = r_w0_perm
+    s1_w1_perm = r_w1_perm
+    s1_w0_asid = r_w0_asid
+    s1_w1_asid = r_w1_asid
+    s1_w0_g = r_w0_g
+    s1_w1_g = r_w1_g
+    s1_w0_lvl = r_w0_lvl
+    s1_w1_lvl = r_w1_lvl
+end behavior
+end module
+
+module pwc
+input:
+  clk
+  rst
+  l2_lookup_vpn [9 bits]
+  l1_lookup_vpn [18 bits]
+  l2_fill_valid
+  l2_fill_vpn [9 bits]
+  l2_fill_ppn [44 bits]
+  l2_fill_g
+  l1_fill_valid
+  l1_fill_vpn [18 bits]
+  l1_fill_ppn [44 bits]
+  l1_fill_g
+  flush
+output:
+  l2_hit
+  l2_ppn [44 bits]
+  l2_g
+  l1_hit
+  l1_ppn [44 bits]
+  l1_g
+wires:
+  l2_rr [2 bits]
+  l1_rr [2 bits]
+  l2_ppn_sel [44 bits]
+  l1_ppn_sel [44 bits]
+  l2_m0_r [1 bits]
+  l2_m1_r [1 bits]
+  l2_m2_r [1 bits]
+  l2_m3_r [1 bits]
+  l1_m0_r [1 bits]
+  l1_m1_r [1 bits]
+  l1_m2_r [1 bits]
+  l1_m3_r [1 bits]
+arrays:
+  l2_valid [4] [1 bits]
+  l2_vpn_arr [4] [9 bits]
+  l2_ppn_arr [4] [44 bits]
+  l2_g_arr [4] [1 bits]
+  l1_valid [4] [1 bits]
+  l1_vpn_arr [4] [18 bits]
+  l1_ppn_arr [4] [44 bits]
+  l1_g_arr [4] [1 bits]
+logic:
+  wire l2_m0 [1 bits] = l2_valid[0] & (l2_vpn_arr[0] == l2_lookup_vpn)
+  wire l2_m1 [1 bits] = l2_valid[1] & (l2_vpn_arr[1] == l2_lookup_vpn)
+  wire l2_m2 [1 bits] = l2_valid[2] & (l2_vpn_arr[2] == l2_lookup_vpn)
+  wire l2_m3 [1 bits] = l2_valid[3] & (l2_vpn_arr[3] == l2_lookup_vpn)
+  wire l1_m0 [1 bits] = l1_valid[0] & (l1_vpn_arr[0] == l1_lookup_vpn)
+  wire l1_m1 [1 bits] = l1_valid[1] & (l1_vpn_arr[1] == l1_lookup_vpn)
+  wire l1_m2 [1 bits] = l1_valid[2] & (l1_vpn_arr[2] == l1_lookup_vpn)
+  wire l1_m3 [1 bits] = l1_valid[3] & (l1_vpn_arr[3] == l1_lookup_vpn)
+  connect l2_hit = l2_m0_r | l2_m1_r | l2_m2_r | l2_m3_r
+  connect l2_ppn_sel = pick(l2_m0_r, l2_ppn_arr[0], pick(l2_m1_r, l2_ppn_arr[1], pick(l2_m2_r, l2_ppn_arr[2], l2_ppn_arr[3])))
+  connect l2_ppn = l2_ppn_sel
+  connect l2_g = pick(l2_m0_r, l2_g_arr[0], pick(l2_m1_r, l2_g_arr[1], pick(l2_m2_r, l2_g_arr[2], l2_g_arr[3])))
+  connect l1_hit = l1_m0_r | l1_m1_r | l1_m2_r | l1_m3_r
+  connect l1_ppn_sel = pick(l1_m0_r, l1_ppn_arr[0], pick(l1_m1_r, l1_ppn_arr[1], pick(l1_m2_r, l1_ppn_arr[2], l1_ppn_arr[3])))
+  connect l1_ppn = l1_ppn_sel
+  connect l1_g = pick(l1_m0_r, l1_g_arr[0], pick(l1_m1_r, l1_g_arr[1], pick(l1_m2_r, l1_g_arr[2], l1_g_arr[3])))
+behavior on clk (posSen) or rst (highSen):
+  if rst:
+    l2_rr = 0
+    l1_rr = 0
+    l2_valid[0] = 0
+    l2_valid[1] = 0
+    l2_valid[2] = 0
+    l2_valid[3] = 0
+    l1_valid[0] = 0
+    l1_valid[1] = 0
+    l1_valid[2] = 0
+    l1_valid[3] = 0
+  else:
+    l2_m0_r = l2_m0
+    l2_m1_r = l2_m1
+    l2_m2_r = l2_m2
+    l2_m3_r = l2_m3
+    l1_m0_r = l1_m0
+    l1_m1_r = l1_m1
+    l1_m2_r = l1_m2
+    l1_m3_r = l1_m3
+    if flush:
+      l2_valid[0] = 0
+      l2_valid[1] = 0
+      l2_valid[2] = 0
+      l2_valid[3] = 0
+      l1_valid[0] = 0
+      l1_valid[1] = 0
+      l1_valid[2] = 0
+      l1_valid[3] = 0
+    if l2_fill_valid:
+      l2_valid[l2_rr] = 1
+      l2_vpn_arr[l2_rr] = l2_fill_vpn
+      l2_ppn_arr[l2_rr] = l2_fill_ppn
+      l2_g_arr[l2_rr] = l2_fill_g
+      l2_rr = (l2_rr + 1) & 3
+    if l1_fill_valid:
+      l1_valid[l1_rr] = 1
+      l1_vpn_arr[l1_rr] = l1_fill_vpn
+      l1_ppn_arr[l1_rr] = l1_fill_ppn
+      l1_g_arr[l1_rr] = l1_fill_g
+      l1_rr = (l1_rr + 1) & 3
+end behavior
+end module
+
+module mmu_p170
+input:
+  mmu_clk
+  mmu_rst
+  satp [64 bits]
+  priv [2 bits]
+  mstatus_mxr
+  mstatus_sum
+  d_req_valid
+  d_req_va [64 bits]
+  d_req_is_write
+  d_req_id [4 bits]
+  i_req_valid
+  i_req_va [64 bits]
+  i_req_id [4 bits]
+  ptw_req_ready
+  ptw_resp_valid
+  ptw_resp_error
+  ptw_resp_data [64 bits]
+  sfence_valid
+  sfence_va [64 bits]
+  sfence_asid [16 bits]
+output:
+  d_req_ready
+  d_resp_valid
+  d_resp_pa [64 bits]
+  d_resp_fault
+  d_resp_cause [4 bits]
+  d_resp_id [4 bits]
+  d_resp_tval [64 bits]
+  i_req_ready
+  i_resp_valid
+  i_resp_pa [64 bits]
+  i_resp_fault
+  i_resp_cause [4 bits]
+  i_resp_id [4 bits]
+  i_resp_tval [64 bits]
+  ptw_req_valid
+  ptw_req_addr [64 bits]
+  ptw_req_we
+  ptw_req_wdata [64 bits]
+states:
+  ST_IDLE
+  ST_L1_WAIT
+  ST_PWC_L2_WAIT
+  ST_WALK_L2
+  ST_PROCESS_L2
+  ST_PWC_L1_WAIT
+  ST_WALK_L1
+  ST_PROCESS_L1
+  ST_WALK_L0
+  ST_PROCESS_L0
+wires:
+  fsm_va [64 bits]
+  fsm_is_write [1 bits]
+  fsm_id [4 bits]
+  fsm_is_i [1 bits]
+  fsm_fetch [1 bits]
+  fsm_ppn2 [44 bits]
+  fsm_ppn1 [44 bits]
+  fsm_g2 [1 bits]
+  fsm_g1 [1 bits]
+  fsm_pte [64 bits]
+  fsm_level [2 bits]
+  l0_d_hit [1 bits]
+  l0_d_pa [64 bits]
+  l0_d_fault [1 bits]
+  l0_d_cause [4 bits]
+  l0_i_hit [1 bits]
+  l0_i_pa [64 bits]
+  l0_i_fault [1 bits]
+  l0_i_cause [4 bits]
+  l1_d_resp_valid [1 bits]
+  l1_d_resp_pa [64 bits]
+  l1_d_resp_fault [1 bits]
+  l1_d_resp_cause [4 bits]
+  l1_d_resp_id [4 bits]
+  l1_d_resp_tval [64 bits]
+  l1_d_hit [1 bits]
+  l1_i_resp_valid [1 bits]
+  l1_i_resp_pa [64 bits]
+  l1_i_resp_fault [1 bits]
+  l1_i_resp_cause [4 bits]
+  l1_i_resp_id [4 bits]
+  l1_i_resp_tval [64 bits]
+  l1_i_hit [1 bits]
+  d_l1_req [1 bits]
+  i_l1_req [1 bits]
+  pwc_l2_hit [1 bits]
+  pwc_l2_ppn [44 bits]
+  pwc_l2_g [1 bits]
+  pwc_l1_hit [1 bits]
+  pwc_l1_ppn [44 bits]
+  pwc_l1_g [1 bits]
+  pwc_l2_fill_valid [1 bits]
+  pwc_l2_fill_vpn [9 bits]
+  pwc_l2_fill_ppn [44 bits]
+  pwc_l2_fill_g [1 bits]
+  pwc_l1_fill_valid [1 bits]
+  pwc_l1_fill_vpn [18 bits]
+  pwc_l1_fill_ppn [44 bits]
+  pwc_l1_fill_g [1 bits]
+  fill_valid [1 bits]
+  fill_va [64 bits]
+  fill_ppn [44 bits]
+  fill_perm [5 bits]
+  fill_asid [16 bits]
+  fill_g [1 bits]
+  fill_level [2 bits]
+  m_mode [1 bits]
+  va_canonical [1 bits]
+  satp_enabled [1 bits]
+  bypass [1 bits]
+  pte_v [1 bits]
+  pte_r [1 bits]
+  pte_w [1 bits]
+  pte_x [1 bits]
+  pte_a [1 bits]
+  pte_d [1 bits]
+  pte_g [1 bits]
+  pte_leaf [1 bits]
+  pte_bad_w [1 bits]
+  pte_rsvd [1 bits]
+  pte_ad_ok [1 bits]
+  pte_fault [1 bits]
+  superpage_ok [1 bits]
+  walk_l2_addr [64 bits]
+  walk_l1_addr [64 bits]
+  walk_l0_addr [64 bits]
+  walk_cur_addr [64 bits]
+  va_vpn0 [9 bits]
+  va_vpn1 [9 bits]
+  pte_ppn [44 bits]
+  pa_l2_ppn [44 bits]
+  pa_l1_ppn [44 bits]
+  align_ok_l1 [1 bits]
+  align_ok_l2 [1 bits]
+  pte_r_bit [1 bits]
+  pte_w_bit [1 bits]
+  pte_x_bit [1 bits]
+  pte_u_bit [1 bits]
+  perm_ok_full [1 bits]
+  d_req_ready_reg [1 bits]
+  d_resp_valid_reg [1 bits]
+  d_resp_pa_reg [64 bits]
+  d_resp_fault_reg [1 bits]
+  d_resp_cause_reg [4 bits]
+  d_resp_id_reg [4 bits]
+  d_resp_tval_reg [64 bits]
+  i_req_ready_reg [1 bits]
+  i_resp_valid_reg [1 bits]
+  i_resp_pa_reg [64 bits]
+  i_resp_fault_reg [1 bits]
+  i_resp_cause_reg [4 bits]
+  i_resp_id_reg [4 bits]
+  i_resp_tval_reg [64 bits]
+  l1_resp_v [1 bits]
+  l1_resp_pa [64 bits]
+  l1_resp_f [1 bits]
+  l1_resp_c [4 bits]
+  l1_resp_id [4 bits]
+  l1_resp_tv [64 bits]
+  l1_hit_sel [1 bits]
+  ptw_resp_data_r [64 bits]
+  ptw_resp_error_r [1 bits]
+logic:
+  replicate fsm_va 6
+  connect m_mode = (priv == 3)
+  connect satp_enabled = (slice(satp, 63, 60) == 8)
+  connect bypass = m_mode | (!satp_enabled)
+  wire d_va_bit38 [1 bits] = slice(d_req_va, 38, 38)
+  wire d_va_upper [25 bits] = slice(d_req_va, 63, 39)
+  wire i_va_bit38 [1 bits] = slice(i_req_va, 38, 38)
+  wire i_va_upper [25 bits] = slice(i_req_va, 63, 39)
+  wire d_va_canon [1 bits] = pick(d_va_bit38, d_va_upper == 0x1FFFFFF, d_va_upper == 0)
+  wire i_va_canon [1 bits] = pick(i_va_bit38, i_va_upper == 0x1FFFFFF, i_va_upper == 0)
+  connect walk_l2_addr = (ext(slice(satp, 43, 0), 64) << 12) | (ext(slice(fsm_va, 38, 30), 64) << 3)
+  connect walk_l1_addr = (ext(fsm_ppn2, 64) << 12) | (ext(slice(fsm_va, 29, 21), 64) << 3)
+  connect walk_l0_addr = (ext(fsm_ppn1, 64) << 12) | (ext(slice(fsm_va, 20, 12), 64) << 3)
+  connect walk_cur_addr = pick(state == ST_WALK_L2, walk_l2_addr, pick(state == ST_WALK_L1, walk_l1_addr, walk_l0_addr))
+  connect va_vpn0 = slice(fsm_va, 20, 12)
+  connect va_vpn1 = slice(fsm_va, 29, 21)
+  connect pte_ppn = slice(ptw_resp_data, 53, 10)
+  wire pte_ppn_hi_l2 [26 bits] = slice(ptw_resp_data, 53, 28)
+  connect pa_l2_ppn = cat(pte_ppn_hi_l2, va_vpn1, va_vpn0)
+  wire pte_ppn_hi_l1 [35 bits] = slice(ptw_resp_data, 53, 19)
+  connect pa_l1_ppn = cat(pte_ppn_hi_l1, va_vpn0)
+  connect align_ok_l2 = (slice(ptw_resp_data, 27, 10) == 0)
+  connect align_ok_l1 = (slice(ptw_resp_data, 18, 10) == 0)
+  connect pte_r_bit = slice(ptw_resp_data, 1, 1)
+  connect pte_w_bit = slice(ptw_resp_data, 2, 2)
+  connect pte_x_bit = slice(ptw_resp_data, 3, 3)
+  connect pte_u_bit = slice(ptw_resp_data, 4, 4)
+  wire priv_ok_int [1 bits] = pick(priv == 0, pte_u_bit, pick(priv == 1, pick(pte_u_bit, pick(fsm_fetch, 0, mstatus_sum), 1), pick(priv == 3, 1, 0)))
+  wire rwx_ok_int [1 bits] = pick(fsm_fetch, pte_x_bit, pick(fsm_is_write, pte_w_bit, pick(pte_r_bit, 1, pick(mstatus_mxr, pte_x_bit, 0))))
+  connect perm_ok_full = priv_ok_int & rwx_ok_int
+  connect pwc_l2_fill_valid = (state == ST_PROCESS_L2) & (!ptw_resp_error) & slice(ptw_resp_data, 0, 0) & (!slice(ptw_resp_data, 7, 7)) & (slice(ptw_resp_data, 3, 1) == 0)
+  connect pwc_l2_fill_vpn = slice(fsm_va, 38, 30)
+  connect pwc_l2_fill_ppn = slice(ptw_resp_data, 53, 10)
+  connect pwc_l2_fill_g = slice(ptw_resp_data, 5, 5)
+  connect pwc_l1_fill_valid = (state == ST_PROCESS_L1) & (!ptw_resp_error) & slice(ptw_resp_data, 0, 0) & (!slice(ptw_resp_data, 7, 7)) & (slice(ptw_resp_data, 3, 1) == 0)
+  connect pwc_l1_fill_vpn = slice(fsm_va, 38, 21)
+  connect pwc_l1_fill_ppn = slice(ptw_resp_data, 53, 10)
+  connect pwc_l1_fill_g = fsm_g2 | slice(ptw_resp_data, 5, 5)
+  connect fill_valid = ((state == ST_PROCESS_L2) & (!ptw_resp_error) & pte_leaf & align_ok_l2 & pte_v & (!pte_rsvd) & (!pte_bad_w) & pte_ad_ok & perm_ok_full) | ((state == ST_PROCESS_L1) & (!ptw_resp_error) & pte_leaf & align_ok_l1 & pte_v & (!pte_rsvd) & (!pte_bad_w) & pte_ad_ok & perm_ok_full) | ((state == ST_PROCESS_L0) & (!ptw_resp_error) & pte_leaf & pte_v & (!pte_rsvd) & (!pte_bad_w) & pte_ad_ok & perm_ok_full)
+  connect fill_va = fsm_va
+  connect fill_ppn = pte_ppn
+  connect fill_perm = slice(ptw_resp_data, 5, 1)
+  connect fill_asid = slice(satp, 59, 44)
+  connect fill_g = pick(state == ST_WALK_L2, slice(ptw_resp_data, 5, 5), pick(state == ST_WALK_L1, fsm_g2 | slice(ptw_resp_data, 5, 5), fsm_g2 | fsm_g1 | slice(ptw_resp_data, 5, 5)))
+  connect fill_level = pick(state == ST_WALK_L2, 2, pick(state == ST_WALK_L1, 1, 0))
+  connect pte_v = slice(ptw_resp_data, 0, 0)
+  connect pte_r = slice(ptw_resp_data, 1, 1)
+  connect pte_w = slice(ptw_resp_data, 2, 2)
+  connect pte_x = slice(ptw_resp_data, 3, 3)
+  connect pte_g = slice(ptw_resp_data, 5, 5)
+  connect pte_a = slice(ptw_resp_data, 6, 6)
+  connect pte_d = slice(ptw_resp_data, 7, 7)
+  connect pte_leaf = pte_r | pte_x
+  connect pte_bad_w = (!pte_r) & pte_w
+  connect pte_rsvd = (slice(ptw_resp_data, 63, 54) != 0)
+  connect pte_ad_ok = pte_a & pick(fsm_is_write, pte_d, 1)
+  wire sp_l1_ok [1 bits] = pick(fsm_level == 1, (slice(ptw_resp_data, 18, 10) == 0), 1)
+  wire sp_l2_ok [1 bits] = pick(fsm_level == 2, (slice(ptw_resp_data, 27, 10) == 0), 1)
+  connect superpage_ok = sp_l1_ok & sp_l2_ok
+  connect pte_fault = (!pte_v) | pte_rsvd | pte_bad_w | (!pte_leaf) | (!pte_ad_ok) | (!superpage_ok) | (!perm_ok_full)
+  connect l1_resp_v = pick(fsm_is_i, l1_i_resp_valid, l1_d_resp_valid)
+  connect l1_resp_pa = pick(fsm_is_i, l1_i_resp_pa, l1_d_resp_pa)
+  connect l1_resp_f = pick(fsm_is_i, l1_i_resp_fault, l1_d_resp_fault)
+  connect l1_resp_c = pick(fsm_is_i, l1_i_resp_cause, l1_d_resp_cause)
+  connect l1_resp_id = pick(fsm_is_i, l1_i_resp_id, l1_d_resp_id)
+  connect l1_resp_tv = pick(fsm_is_i, l1_i_resp_tval, l1_d_resp_tval)
+  connect l1_hit_sel = pick(fsm_is_i, l1_i_hit, l1_d_hit)
+  connect d_req_ready = d_req_ready_reg
+  connect d_resp_valid = d_resp_valid_reg
+  connect d_resp_pa = d_resp_pa_reg
+  connect d_resp_fault = d_resp_fault_reg
+  connect d_resp_cause = d_resp_cause_reg
+  connect d_resp_id = d_resp_id_reg
+  connect d_resp_tval = d_resp_tval_reg
+  connect i_req_ready = i_req_ready_reg
+  connect i_resp_valid = i_resp_valid_reg
+  connect i_resp_pa = i_resp_pa_reg
+  connect i_resp_fault = i_resp_fault_reg
+  connect i_resp_cause = i_resp_cause_reg
+  connect i_resp_id = i_resp_id_reg
+  connect i_resp_tval = i_resp_tval_reg
+  connect ptw_req_valid = (state == ST_WALK_L2) | (state == ST_WALK_L1) | (state == ST_WALK_L0)
+  connect ptw_req_addr = walk_cur_addr
+  connect ptw_req_we = 0
+  connect ptw_req_wdata = 0
+  instance pwc as u_pwc:
+    clk = mmu_clk
+    rst = mmu_rst
+    l2_lookup_vpn = slice(fsm_va, 38, 30)
+    l1_lookup_vpn = slice(fsm_va, 38, 21)
+    l2_fill_valid = pwc_l2_fill_valid
+    l2_fill_vpn = pwc_l2_fill_vpn
+    l2_fill_ppn = pwc_l2_fill_ppn
+    l2_fill_g = pwc_l2_fill_g
+    l1_fill_valid = pwc_l1_fill_valid
+    l1_fill_vpn = pwc_l1_fill_vpn
+    l1_fill_ppn = pwc_l1_fill_ppn
+    l1_fill_g = pwc_l1_fill_g
+    flush = sfence_valid & (sfence_va == 0) & (sfence_asid == 0)
+    l2_hit = pwc_l2_hit
+    l2_ppn = pwc_l2_ppn
+    l2_g = pwc_l2_g
+    l1_hit = pwc_l1_hit
+    l1_ppn = pwc_l1_ppn
+    l1_g = pwc_l1_g
+  end instance
+  instance l0_tlb as l0_d:
+    clk = mmu_clk
+    rst = mmu_rst
+    req_valid = d_req_valid
+    req_va = d_req_va
+    req_is_write = d_req_is_write
+    req_is_fetch = 0
+    satp = satp
+    priv = priv
+    mstatus_mxr = mstatus_mxr
+    mstatus_sum = mstatus_sum
+    fill_valid = fill_valid & (!fsm_is_i)
+    fill_va = fsm_va_r2
+    fill_ppn = fill_ppn
+    fill_perm = fill_perm
+    fill_asid = fill_asid
+    fill_g = fill_g
+    fill_level = fill_level
+    sfence_valid = sfence_valid
+    sfence_va = sfence_va
+    sfence_asid = sfence_asid
+    hit = l0_d_hit
+    pa = l0_d_pa
+    fault = l0_d_fault
+    cause = l0_d_cause
+  end instance
+  instance l0_tlb as l0_i:
+    clk = mmu_clk
+    rst = mmu_rst
+    req_valid = i_req_valid
+    req_va = i_req_va
+    req_is_write = 0
+    req_is_fetch = 1
+    satp = satp
+    priv = priv
+    mstatus_mxr = mstatus_mxr
+    mstatus_sum = mstatus_sum
+    fill_valid = fill_valid & fsm_is_i
+    fill_va = fsm_va_r3
+    fill_ppn = fill_ppn
+    fill_perm = fill_perm
+    fill_asid = fill_asid
+    fill_g = fill_g
+    fill_level = fill_level
+    sfence_valid = sfence_valid
+    sfence_va = sfence_va
+    sfence_asid = sfence_asid
+    hit = l0_i_hit
+    pa = l0_i_pa
+    fault = l0_i_fault
+    cause = l0_i_cause
+  end instance
+  instance l1_tlb as l1_d:
+    clk = mmu_clk
+    rst = mmu_rst
+    req_valid = d_l1_req
+    req_va = fsm_va_r0
+    req_is_write = fsm_is_write
+    req_is_fetch = 0
+    req_id = fsm_id
+    satp = satp
+    priv = priv
+    mstatus_mxr = mstatus_mxr
+    mstatus_sum = mstatus_sum
+    fill_valid = fill_valid & (!fsm_is_i)
+    fill_va = fsm_va_r4
+    fill_ppn = fill_ppn
+    fill_perm = fill_perm
+    fill_asid = fill_asid
+    fill_g = fill_g
+    fill_level = fill_level
+    sfence_valid = sfence_valid
+    sfence_va = sfence_va
+    sfence_asid = sfence_asid
+    resp_valid = l1_d_resp_valid
+    resp_pa = l1_d_resp_pa
+    resp_fault = l1_d_resp_fault
+    resp_cause = l1_d_resp_cause
+    resp_id = l1_d_resp_id
+    resp_tval = l1_d_resp_tval
+    hit = l1_d_hit
+  end instance
+  instance l1_tlb as l1_i:
+    clk = mmu_clk
+    rst = mmu_rst
+    req_valid = i_l1_req
+    req_va = fsm_va_r1
+    req_is_write = 0
+    req_is_fetch = 1
+    req_id = fsm_id
+    satp = satp
+    priv = priv
+    mstatus_mxr = mstatus_mxr
+    mstatus_sum = mstatus_sum
+    fill_valid = fill_valid & fsm_is_i
+    fill_va = fsm_va_r5
+    fill_ppn = fill_ppn
+    fill_perm = fill_perm
+    fill_asid = fill_asid
+    fill_g = fill_g
+    fill_level = fill_level
+    sfence_valid = sfence_valid
+    sfence_va = sfence_va
+    sfence_asid = sfence_asid
+    resp_valid = l1_i_resp_valid
+    resp_pa = l1_i_resp_pa
+    resp_fault = l1_i_resp_fault
+    resp_cause = l1_i_resp_cause
+    resp_id = l1_i_resp_id
+    resp_tval = l1_i_resp_tval
+    hit = l1_i_hit
+  end instance
+behavior on mmu_clk (posSen) or mmu_rst (highSen):
+  if mmu_rst:
+    state = ST_IDLE
+    d_req_ready_reg = 1
+    i_req_ready_reg = 1
+    d_resp_valid_reg = 0
+    i_resp_valid_reg = 0
+    d_l1_req = 0
+    i_l1_req = 0
+    fsm_is_i = 0
+    fsm_fetch = 0
+  else:
+    d_resp_valid_reg = 0
+    i_resp_valid_reg = 0
+    d_l1_req = 0
+    i_l1_req = 0
+    when state:
+      ST_IDLE:
+        d_req_ready_reg = 1
+        i_req_ready_reg = 1
+        if bypass:
+          if d_req_valid:
+            d_resp_valid_reg = 1
+            d_resp_pa_reg = d_req_va
+            d_resp_fault_reg = 0
+            d_resp_cause_reg = 0
+            d_resp_id_reg = d_req_id
+            d_resp_tval_reg = 0
+          if i_req_valid:
+            i_resp_valid_reg = 1
+            i_resp_pa_reg = i_req_va
+            i_resp_fault_reg = 0
+            i_resp_cause_reg = 0
+            i_resp_id_reg = i_req_id
+            i_resp_tval_reg = 0
+        else if d_req_valid:
+          if (!d_va_canon) & (!bypass):
+            d_resp_valid_reg = 1
+            d_resp_pa_reg = 0
+            d_resp_fault_reg = 1
+            d_resp_cause_reg = pick(d_req_is_write, 15, 13)
+            d_resp_id_reg = d_req_id
+            d_resp_tval_reg = d_req_va
+          else if l0_d_hit:
+            d_resp_valid_reg = 1
+            d_resp_pa_reg = l0_d_pa
+            d_resp_fault_reg = l0_d_fault
+            d_resp_cause_reg = l0_d_cause
+            d_resp_id_reg = d_req_id
+            d_resp_tval_reg = pick(l0_d_fault, d_req_va, 0)
+          else:
+            fsm_va = d_req_va
+            fsm_is_write = d_req_is_write
+            fsm_id = d_req_id
+            fsm_is_i = 0
+            fsm_fetch = 0
+            d_l1_req = 1
+            state = ST_L1_WAIT
+        else if i_req_valid:
+          if (!i_va_canon) & (!bypass):
+            i_resp_valid_reg = 1
+            i_resp_pa_reg = 0
+            i_resp_fault_reg = 1
+            i_resp_cause_reg = 12
+            i_resp_id_reg = i_req_id
+            i_resp_tval_reg = i_req_va
+          else if l0_i_hit:
+            i_resp_valid_reg = 1
+            i_resp_pa_reg = l0_i_pa
+            i_resp_fault_reg = l0_i_fault
+            i_resp_cause_reg = l0_i_cause
+            i_resp_id_reg = i_req_id
+            i_resp_tval_reg = pick(l0_i_fault, i_req_va, 0)
+          else:
+            fsm_va = i_req_va
+            fsm_is_write = 0
+            fsm_id = i_req_id
+            fsm_is_i = 1
+            fsm_fetch = 1
+            i_l1_req = 1
+            state = ST_L1_WAIT
+      ST_L1_WAIT:
+        d_req_ready_reg = 0
+        i_req_ready_reg = 0
+        if l1_resp_v:
+          if l1_hit_sel:
+            d_resp_valid_reg = (!fsm_is_i)
+            i_resp_valid_reg = fsm_is_i
+            d_resp_pa_reg = l1_resp_pa
+            i_resp_pa_reg = l1_resp_pa
+            d_resp_fault_reg = (!fsm_is_i) & l1_resp_f
+            i_resp_fault_reg = fsm_is_i & l1_resp_f
+            d_resp_cause_reg = l1_resp_c
+            i_resp_cause_reg = l1_resp_c
+            d_resp_id_reg = l1_resp_id
+            i_resp_id_reg = l1_resp_id
+            d_resp_tval_reg = (!fsm_is_i) & l1_resp_tv
+            i_resp_tval_reg = fsm_is_i & l1_resp_tv
+            state = ST_IDLE
+          else:
+            state = ST_PWC_L2_WAIT
+      ST_PWC_L2_WAIT:
+        state = ST_WALK_L2
+      ST_WALK_L2:
+        if pwc_l2_hit:
+          fsm_ppn2 = pwc_l2_ppn
+          fsm_g2 = pwc_l2_g
+          state = ST_PWC_L1_WAIT
+        else:
+          if ptw_resp_valid:
+            ptw_resp_data_r = ptw_resp_data
+            ptw_resp_error_r = ptw_resp_error
+            state = ST_PROCESS_L2
+      ST_PROCESS_L2:
+        fsm_pte = ptw_resp_data_r
+        if ptw_resp_error_r:
+          d_resp_valid_reg = (!fsm_is_i)
+          i_resp_valid_reg = fsm_is_i
+          d_resp_fault_reg = (!fsm_is_i)
+          i_resp_fault_reg = fsm_is_i
+          d_resp_cause_reg = pick(fsm_fetch, 1, pick(fsm_is_write, 7, 5))
+          i_resp_cause_reg = pick(fsm_fetch, 1, pick(fsm_is_write, 7, 5))
+          d_resp_tval_reg = (!fsm_is_i) & fsm_va
+          i_resp_tval_reg = fsm_is_i & fsm_va
+          state = ST_IDLE
+        else if (!pte_v) | pte_rsvd | pte_bad_w:
+          d_resp_valid_reg = (!fsm_is_i)
+          i_resp_valid_reg = fsm_is_i
+          d_resp_fault_reg = (!fsm_is_i)
+          i_resp_fault_reg = fsm_is_i
+          d_resp_cause_reg = pick(fsm_fetch, 12, pick(fsm_is_write, 15, 13))
+          i_resp_cause_reg = pick(fsm_fetch, 12, pick(fsm_is_write, 15, 13))
+          d_resp_tval_reg = (!fsm_is_i) & fsm_va
+          i_resp_tval_reg = fsm_is_i & fsm_va
+          state = ST_IDLE
+        else if pte_leaf:
+          if (!align_ok_l2) | (!pte_ad_ok) | (!perm_ok_full):
+            d_resp_valid_reg = (!fsm_is_i)
+            i_resp_valid_reg = fsm_is_i
+            d_resp_fault_reg = (!fsm_is_i)
+            i_resp_fault_reg = fsm_is_i
+            d_resp_cause_reg = pick(fsm_fetch, 12, pick(fsm_is_write, 15, 13))
+            i_resp_cause_reg = pick(fsm_fetch, 12, pick(fsm_is_write, 15, 13))
+            d_resp_tval_reg = (!fsm_is_i) & fsm_va
+            i_resp_tval_reg = fsm_is_i & fsm_va
+            state = ST_IDLE
+          else:
+            d_resp_valid_reg = (!fsm_is_i)
+            i_resp_valid_reg = fsm_is_i
+            d_resp_pa_reg = ext(pa_l2_ppn, 64) << 12 | ext(slice(fsm_va, 11, 0), 64)
+            i_resp_pa_reg = ext(pa_l2_ppn, 64) << 12 | ext(slice(fsm_va, 11, 0), 64)
+            d_resp_fault_reg = 0
+            i_resp_fault_reg = 0
+            d_resp_cause_reg = 0
+            i_resp_cause_reg = 0
+            d_resp_id_reg = fsm_id
+            i_resp_id_reg = fsm_id
+            d_resp_tval_reg = 0
+            i_resp_tval_reg = 0
+            state = ST_IDLE
+        else:
+          fsm_ppn2 = pte_ppn
+          fsm_g2 = slice(ptw_resp_data_r, 5, 5)
+          state = ST_PWC_L1_WAIT
+      ST_PWC_L1_WAIT:
+        state = ST_WALK_L1
+      ST_WALK_L1:
+        if pwc_l1_hit:
+          fsm_ppn1 = pwc_l1_ppn
+          fsm_g1 = pwc_l1_g
+          state = ST_WALK_L0
+        else:
+          if ptw_resp_valid:
+            ptw_resp_data_r = ptw_resp_data
+            ptw_resp_error_r = ptw_resp_error
+            state = ST_PROCESS_L1
+      ST_PROCESS_L1:
+        fsm_pte = ptw_resp_data_r
+        if ptw_resp_error_r:
+          d_resp_valid_reg = (!fsm_is_i)
+          i_resp_valid_reg = fsm_is_i
+          d_resp_fault_reg = (!fsm_is_i)
+          i_resp_fault_reg = fsm_is_i
+          d_resp_cause_reg = pick(fsm_fetch, 1, pick(fsm_is_write, 7, 5))
+          i_resp_cause_reg = pick(fsm_fetch, 1, pick(fsm_is_write, 7, 5))
+          d_resp_tval_reg = (!fsm_is_i) & fsm_va
+          i_resp_tval_reg = fsm_is_i & fsm_va
+          state = ST_IDLE
+        else if (!pte_v) | pte_rsvd | pte_bad_w:
+          d_resp_valid_reg = (!fsm_is_i)
+          i_resp_valid_reg = fsm_is_i
+          d_resp_fault_reg = (!fsm_is_i)
+          i_resp_fault_reg = fsm_is_i
+          d_resp_cause_reg = pick(fsm_fetch, 12, pick(fsm_is_write, 15, 13))
+          i_resp_cause_reg = pick(fsm_fetch, 12, pick(fsm_is_write, 15, 13))
+          d_resp_tval_reg = (!fsm_is_i) & fsm_va
+          i_resp_tval_reg = fsm_is_i & fsm_va
+          state = ST_IDLE
+        else if pte_leaf:
+          if (!align_ok_l1) | (!pte_ad_ok) | (!perm_ok_full):
+            d_resp_valid_reg = (!fsm_is_i)
+            i_resp_valid_reg = fsm_is_i
+            d_resp_fault_reg = (!fsm_is_i)
+            i_resp_fault_reg = fsm_is_i
+            d_resp_cause_reg = pick(fsm_fetch, 12, pick(fsm_is_write, 15, 13))
+            i_resp_cause_reg = pick(fsm_fetch, 12, pick(fsm_is_write, 15, 13))
+            d_resp_tval_reg = (!fsm_is_i) & fsm_va
+            i_resp_tval_reg = fsm_is_i & fsm_va
+            state = ST_IDLE
+          else:
+            d_resp_valid_reg = (!fsm_is_i)
+            i_resp_valid_reg = fsm_is_i
+            d_resp_pa_reg = ext(pa_l1_ppn, 64) << 12 | ext(slice(fsm_va, 11, 0), 64)
+            i_resp_pa_reg = ext(pa_l1_ppn, 64) << 12 | ext(slice(fsm_va, 11, 0), 64)
+            d_resp_fault_reg = 0
+            i_resp_fault_reg = 0
+            d_resp_cause_reg = 0
+            i_resp_cause_reg = 0
+            d_resp_id_reg = fsm_id
+            i_resp_id_reg = fsm_id
+            d_resp_tval_reg = 0
+            i_resp_tval_reg = 0
+            state = ST_IDLE
+        else:
+          fsm_ppn1 = pte_ppn
+          fsm_g1 = fsm_g2 | slice(ptw_resp_data_r, 5, 5)
+          state = ST_WALK_L0
+      ST_WALK_L0:
+        d_req_ready_reg = 0
+        i_req_ready_reg = 0
+        if ptw_resp_valid:
+          ptw_resp_data_r = ptw_resp_data
+          ptw_resp_error_r = ptw_resp_error
+          state = ST_PROCESS_L0
+      ST_PROCESS_L0:
+        d_req_ready_reg = 0
+        i_req_ready_reg = 0
+        fsm_pte = ptw_resp_data_r
+        fsm_level = 0
+        if ptw_resp_error_r:
+          d_resp_valid_reg = (!fsm_is_i)
+          i_resp_valid_reg = fsm_is_i
+          d_resp_fault_reg = (!fsm_is_i)
+          i_resp_fault_reg = fsm_is_i
+          d_resp_cause_reg = pick(fsm_is_write, 7, 5)
+          i_resp_cause_reg = 1
+          d_resp_tval_reg = (!fsm_is_i) & fsm_va
+          i_resp_tval_reg = fsm_is_i & fsm_va
+          state = ST_IDLE
+        else if pte_fault:
+          d_resp_valid_reg = (!fsm_is_i)
+          i_resp_valid_reg = fsm_is_i
+          d_resp_fault_reg = (!fsm_is_i)
+          i_resp_fault_reg = fsm_is_i
+          d_resp_cause_reg = pick(fsm_fetch, 12, pick(fsm_is_write, 15, 13))
+          i_resp_cause_reg = pick(fsm_fetch, 12, pick(fsm_is_write, 15, 13))
+          d_resp_tval_reg = (!fsm_is_i) & fsm_va
+          i_resp_tval_reg = fsm_is_i & fsm_va
+          state = ST_IDLE
+        else:
+          d_resp_valid_reg = (!fsm_is_i)
+          i_resp_valid_reg = fsm_is_i
+          d_resp_pa_reg = ext(cat(pte_ppn, slice(fsm_va, 11, 0)), 64)
+          i_resp_pa_reg = ext(cat(pte_ppn, slice(fsm_va, 11, 0)), 64)
+          d_resp_fault_reg = 0
+          i_resp_fault_reg = 0
+          d_resp_cause_reg = 0
+          i_resp_cause_reg = 0
+          d_resp_id_reg = fsm_id
+          i_resp_id_reg = fsm_id
+          d_resp_tval_reg = 0
+          i_resp_tval_reg = 0
+          state = ST_IDLE
+      fallbackVal:
+        state = ST_IDLE
+end behavior
+end module

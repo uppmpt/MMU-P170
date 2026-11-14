@@ -1,0 +1,7 @@
+*.log
+*.o
+*.d
+/tests/obj_*/
+*.swp
+*~
+.DS_Store
